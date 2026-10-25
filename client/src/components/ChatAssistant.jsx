@@ -64,7 +64,7 @@ export default function ChatAssistant() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading, toolCallStatus]);
+  }, [messages, loading, agentSteps]);
 
   const handleCreateNewChat = async () => {
     try {
