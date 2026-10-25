@@ -11,7 +11,8 @@ export default function ChatAssistant() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [toolCallStatus, setToolCallStatus] = useState(null);
+  const [agentSteps, setAgentSteps] = useState([]); // [{ type: 'thought'|'tool'|'observation', text: '', time: '' }]
+  const [thinkingSeconds, setThinkingSeconds] = useState(0);
   
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [loadProgress, setLoadProgress] = useState(0);
@@ -100,7 +101,8 @@ export default function ChatAssistant() {
   const handleStop = () => {
     webGpuLLM.interrupt();
     setLoading(false);
-    setToolCallStatus(null);
+    setAgentSteps([]);
+    setThinkingSeconds(0);
     toast('Generation stopped', { icon: '⏹' });
     setTimeout(() => textareaRef.current?.focus(), 50);
   };
@@ -175,12 +177,14 @@ export default function ChatAssistant() {
       if (filtered.length > 0) {
         const lines = filtered.map(t => `• **${t.title}** (${(t.status || '').toUpperCase()}) — Assigned to: *${t.assignee || 'Unassigned'}* [Priority: ${t.priority || 'medium'}]`);
         return {
-          text: `Found ${filtered.length} task(s)${targetStatus !== 'all' ? ` in '${targetStatus.toUpperCase()}'` : ''}:\n\n${lines.join('\n')}`,
+          raw_data: filtered,
+          text: `Found ${filtered.length} task(s)${targetStatus !== 'all' ? ` currently in '${targetStatus.toUpperCase()}'` : ''}:\n\n${lines.join('\n')}`,
           sources: []
         };
       } else {
         return {
-          text: `There are currently no tasks in '${targetStatus.toUpperCase()}'. (Total tasks across all stages: ${allTasks.length})`,
+          raw_data: [],
+          text: `There are currently 0 tasks in '${targetStatus.toUpperCase()}'. (Total tasks across all stages: ${allTasks.length})`,
           sources: []
         };
       }
@@ -292,9 +296,20 @@ export default function ChatAssistant() {
     ]);
 
     setLoading(true);
-    setToolCallStatus(null);
+    setAgentSteps([]);
+    setThinkingSeconds(0);
+
+    const timerInterval = setInterval(() => {
+      setThinkingSeconds(prev => prev + 1);
+    }, 1000);
 
     try {
+      // Step 1: Agent Thinking & Plan Formulation
+      setAgentSteps(prev => [
+        ...prev,
+        { type: 'thought', text: `Analyzing user intent: "${userText}"... Determining required tool execution.` }
+      ]);
+
       const toolPlanningPrompt = `<start_of_turn>user
 You are the local AI Work OS Planner.
 Select exactly ONE tool and respond ONLY in TOON format (tool name followed by key: value attributes). Do not output conversational chit-chat.
@@ -378,7 +393,7 @@ Plan:<end_of_turn>
 
       if (!toolData || !toolData.tool) {
         const lower = userText.toLowerCase();
-        if (lower.includes("in progress") || lower.includes("doing")) {
+        if (lower.includes("in progress") || lower.includes("doing") || lower.includes("active")) {
           toolData = { tool: "get_tasks", status: "doing" };
         } else if (lower.includes("todo") || lower.includes("to do")) {
           toolData = { tool: "get_tasks", status: "todo" };
@@ -395,26 +410,71 @@ Plan:<end_of_turn>
 
       const toolParamsText = Object.entries(toolData)
         .filter(([k]) => k !== 'tool')
-        .map(([k, v]) => `${k}: ${v}`)
+        .map(([k, v]) => `${k}: "${v}"`)
         .join(', ');
-      setToolCallStatus({ name: toolData.tool, args: toolParamsText || 'none' });
+
+      // Step 2: Agent Tool Call
+      setAgentSteps(prev => [
+        ...prev,
+        { type: 'tool', text: `Calling Tool: ${toolData.tool}(${toolParamsText || 'none'})` }
+      ]);
 
       // Execute tool
       const resultObj = await executeToolCall(toolData, userText);
-      const formattedResultText = resultObj.text;
+      const toolOutputSummary = resultObj.text;
       const citedSources = resultObj.sources || [];
+
+      // Step 3: Tool Observation
+      setAgentSteps(prev => [
+        ...prev,
+        { type: 'observation', text: `Tool Output: ${toolOutputSummary.split('\n')[0]}` }
+      ]);
+
+      // Step 4: Agent Reasoning & Natural Language Synthesis
+      setAgentSteps(prev => [
+        ...prev,
+        { type: 'thought', text: `Synthesizing final conversational answer in natural language based on tool output...` }
+      ]);
+
+      const synthesisPrompt = `<start_of_turn>user
+You are Gemma, the local intelligent Work OS Assistant.
+The user asked: "${userText}"
+
+You ran the tool "${toolData.tool}" which returned:
+"""
+${toolOutputSummary}
+"""
+
+Formulate a helpful, direct, concise natural language response to the user.
+- If they asked what is in progress, mention ONLY what is in progress.
+- Speak naturally and politely as a professional colleague.
+- Be concise.<end_of_turn>
+<start_of_turn>model
+`;
+
+      let finalNaturalLanguageReply = "";
+      try {
+        finalNaturalLanguageReply = await webGpuLLM.generate(synthesisPrompt);
+      } catch (e) {
+        console.warn('Synthesis fallback note:', e);
+      }
+
+      if (!finalNaturalLanguageReply || finalNaturalLanguageReply.trim().length === 0) {
+        finalNaturalLanguageReply = toolOutputSummary;
+      }
 
       setMessages(prev => prev.map(m => m.id === assistantMsgId ? {
         ...m,
-        content: formattedResultText,
-        sources: citedSources
+        content: finalNaturalLanguageReply,
+        sources: citedSources,
+        steps: [...agentSteps]
       } : m));
 
-      await ChatService.saveTurn(activeSessionId, userText, formattedResultText, citedSources).catch(console.warn);
+      await ChatService.saveTurn(activeSessionId, userText, finalNaturalLanguageReply, citedSources).catch(console.warn);
       loadSessions();
 
       try {
-        const ttsData = await ChatService.tts(formattedResultText.replace(/[*#•]/g, ''));
+        const ttsData = await ChatService.tts(finalNaturalLanguageReply.replace(/[*#•]/g, ''));
         const ttsUrl = ttsData?.audio_url;
         if (ttsUrl) {
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, tts_audio_url: ttsUrl } : m));
@@ -430,9 +490,9 @@ Plan:<end_of_turn>
         content: `Error: ${err.message || 'Execution error.'}`
       } : m));
     } finally {
-      // Re-enable send button unconditionally
+      clearInterval(timerInterval);
       setLoading(false);
-      setToolCallStatus(null);
+      setAgentSteps([]);
       setTimeout(() => textareaRef.current?.focus(), 50);
     }
   };
@@ -635,22 +695,66 @@ Plan:<end_of_turn>
           })
         )}
 
-        {/* Live Tool Calling Status Pill */}
-        {toolCallStatus && (
+        {/* Live Thought, Tool Call & Observation Trace */}
+        {loading && (
           <div style={{
             display: 'flex',
-            alignItems: 'center',
+            flexDirection: 'column',
             gap: '8px',
-            background: 'var(--bg-hover)',
+            background: 'var(--bg-secondary)',
             border: '1px solid var(--border-light)',
-            padding: '6px 12px',
-            borderRadius: '4px',
-            fontSize: '12px',
-            color: 'var(--text-secondary)',
-            width: 'fit-content'
+            padding: '10px 12px',
+            borderRadius: '6px',
+            fontSize: '12px'
           }}>
-            <Wrench size={13} color="var(--text-primary)" />
-            <span>Calling: <strong style={{ color: 'var(--text-primary)' }}>{toolCallStatus.name}</strong>({toolCallStatus.args})</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '500' }}>
+                <Sparkles size={12} className="animate-spin text-[#2563eb]" /> Agent Reasoning Trace
+              </span>
+              <span style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                Thinking: {thinkingSeconds}s
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+              {agentSteps.map((step, sIdx) => {
+                if (step.type === 'thought') {
+                  return (
+                    <div key={sIdx} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>💭</span>
+                      <span>{step.text}</span>
+                    </div>
+                  );
+                }
+                if (step.type === 'tool') {
+                  return (
+                    <div key={sIdx} style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '6px', 
+                      padding: '4px 8px', 
+                      borderRadius: '4px',
+                      background: 'var(--card-bg)',
+                      border: '1px solid var(--border-light)',
+                      color: 'var(--text-primary)',
+                      fontFamily: 'monospace',
+                      fontSize: '11.5px'
+                    }}>
+                      <Wrench size={12} />
+                      <strong>{step.text}</strong>
+                    </div>
+                  );
+                }
+                if (step.type === 'observation') {
+                  return (
+                    <div key={sIdx} style={{ color: 'var(--text-muted)', fontSize: '11.5px', paddingLeft: '20px' }}>
+                      ↳ {step.text}
+                    </div>
+                  );
+                }
+                return null;
+              })}
+            </div>
           </div>
         )}
 
