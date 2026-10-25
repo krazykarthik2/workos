@@ -187,28 +187,53 @@ export default function ChatAssistant() {
     }
 
     if (toolName === "get_events" || toolName.includes("event") || toolName.includes("meeting")) {
-      const events = await EventService.list();
-      if (events.length > 0) {
-        const eventLines = events.map(e => `📅 **${e.title}** [${e.category}] on ${e.event_date}: ${e.description}`);
+      const allEvents = await EventService.list();
+      const monthFilter = toolData.month ? toolData.month.toLowerCase() : "";
+      
+      let filtered = allEvents;
+      if (monthFilter) {
+        filtered = allEvents.filter(e => {
+          const d = (e.event_date || "").toLowerCase();
+          const desc = (e.description || "").toLowerCase();
+          return d.includes(monthFilter) || desc.includes(monthFilter);
+        });
+      }
+
+      if (filtered.length > 0) {
+        const eventLines = filtered.map(e => `• **${e.title}** [${e.category}] on ${e.event_date}: ${e.description}`);
         return {
-          text: `Logged Company Events:\n\n${eventLines.join('\n')}`,
+          raw_data: filtered,
+          entity_type: 'event',
+          text: `Logged Company Events${monthFilter ? ` for ${monthFilter}` : ''}:\n\n${eventLines.join('\n')}`,
           sources: []
         };
       } else {
-        return { text: "No outside events or meetings logged.", sources: [] };
+        return {
+          raw_data: [],
+          entity_type: 'event',
+          text: `No company events or meetings found${monthFilter ? ` in ${monthFilter}` : ''}.`,
+          sources: []
+        };
       }
     }
 
     if (toolName === "get_work_done" || toolName.includes("work")) {
       const logs = await WorkDoneService.list();
       if (logs.length > 0) {
-        const workLines = logs.map(l => `✓ **${l.title}** by *${l.completed_by}* — ${l.notes}`);
+        const workLines = logs.map(l => `• **${l.title}** by *${l.completed_by}* — ${l.notes}`);
         return {
+          raw_data: logs,
+          entity_type: 'work_done',
           text: `Completed Work Log:\n\n${workLines.join('\n')}`,
           sources: []
         };
       } else {
-        return { text: "No completed work deliverables recorded yet.", sources: [] };
+        return { 
+          raw_data: [],
+          entity_type: 'work_done',
+          text: "No completed work deliverables recorded yet.", 
+          sources: [] 
+        };
       }
     }
 
@@ -288,14 +313,14 @@ export default function ChatAssistant() {
         { type: 'thought', text: `Analyzing user intent: "${userText}"... Determining required tool execution.` }
       ]);
 
-      const toolPlanningPrompt = `<start_of_turn>user
+      const toolPlanningPrompt = `<|start_header_id|>system<|end_header_id|>
 You are the local AI Work OS Planner.
 Select exactly ONE tool and respond ONLY in TOON format (tool name followed by key: value attributes). Do not output conversational chit-chat.
 
 AVAILABLE TOOLS:
 - get_tasks: fetch tasks (status: all, todo, doing, done, priority: high, medium, low)
 - search_files: search indexed documents & OCR files (query: string)
-- get_events: list calendar events, meetings, milestones
+- get_events: list calendar events, meetings, milestones (month: november, october, etc.)
 - get_work_done: list logged deliverables, proof of work, completed milestones
 - create_task: create a new task (title: string, status: todo/doing/done, priority: high/medium/low, assignee: string)
 - assign_task: reassign an existing task (task_title: string, assignee: string)
@@ -318,57 +343,30 @@ Plan:
 tool: get_tasks
 priority: high
 
-User: show me all todo items
+User: are there any new events in november?
 Plan:
-tool: get_tasks
-status: todo
-
-User: what have we finished so far?
-Plan:
-tool: get_tasks
-status: done
-
-User: list all our tasks
-Plan:
-tool: get_tasks
-status: all
-
-User: create a high priority task for API testing assigned to Sarah
-Plan:
-tool: create_task
-title: API testing
-status: todo
-priority: high
-assignee: Sarah
-
-User: assign FAISS indexing to Alex
-Plan:
-tool: assign_task
-task_title: FAISS indexing
-assignee: Alex
-
-User: move Database Setup to done
-Plan:
-tool: move_task
-task_title: Database Setup
-status: done
+tool: get_events
+month: november
 
 User: what upcoming meetings or company events do we have?
 Plan:
 tool: get_events
 
-User: find the quarterly revenue report and OCR notes
+User: what is my work log?
 Plan:
-tool: search_files
-query: quarterly revenue report
+tool: get_work_done
 
 User: what work was delivered or logged today?
 Plan:
 tool: get_work_done
 
-User: ${userText}
-Plan:<end_of_turn>
-<start_of_turn>model
+User: find the quarterly revenue report and OCR notes
+Plan:
+tool: search_files
+query: quarterly revenue report<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+${userText}<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
 `;
 
       let stage1Output = "";
@@ -440,25 +438,22 @@ Plan:<end_of_turn>
         { type: 'thought', text: `Analyzing observation: formulating precise natural response focused strictly on "${userText}".` }
       ]);
 
-      const synthesisPrompt = `<start_of_turn>user
-You are Gemma, the local AI Work OS executive assistant.
+      const synthesisPrompt = `<|start_header_id|>system<|end_header_id|>
+You are the AI Work OS executive assistant.
 Context: You executed tool "${toolData.tool}" with params (${toolParamsText || 'none'}).
-
-USER QUERY:
-"${userText}"
-
-TOOL OBSERVATION:
+Observation from Database:
 """
 ${toolOutputSummary}
 """
 
-STRICT INSTRUCTIONS:
-1. Formulate a direct, natural language answer to the user in 1-3 conversational sentences.
-2. If the user asked about urgent or high priority tasks, focus ONLY on urgent/high priority items.
-3. If the user asked about tasks in progress ("doing"), mention ONLY tasks that are currently in progress.
-4. If no tasks match, state clearly that no items match the request.
-5. Do NOT simply repeat "Found X task(s): • Task..." raw lists. Speak conversationally as a helpful colleague.<end_of_turn>
-<start_of_turn>model
+Instructions:
+1. Formulate a direct, helpful, natural language response in 1-3 conversational sentences.
+2. If the user asked about events in a specific month (e.g. November), mention ONLY events in that month.
+3. If the user asked about work logs, summarize who delivered what deliverables.
+4. Speak conversationally as a polished human teammate. Do not dump raw bullet point symbols.<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+${userText}<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
 `;
 
       let finalNaturalLanguageReply = "";
@@ -470,32 +465,50 @@ STRICT INSTRUCTIONS:
 
       // If synthesis is empty or failed, produce an accurate, factual natural language response
       if (!finalNaturalLanguageReply || finalNaturalLanguageReply.trim().length === 0) {
-        const tasksFound = resultObj.raw_data || [];
-        if (tasksFound.length === 0) {
-          if (toolData.priority === 'high' || lowerQuery.includes("urgent")) {
-            finalNaturalLanguageReply = "You have no urgent tasks pending in your to-do list right now.";
-          } else if (toolData.status === 'doing' || lowerQuery.includes("progress")) {
-            finalNaturalLanguageReply = "There are no tasks currently in progress.";
-          } else if (toolData.status === 'todo') {
-            finalNaturalLanguageReply = "You have no pending tasks on your to-do board.";
+        if (resultObj.entity_type === 'event') {
+          const eventsFound = resultObj.raw_data || [];
+          if (eventsFound.length === 0) {
+            finalNaturalLanguageReply = "There are no company events scheduled for that timeframe.";
           } else {
-            finalNaturalLanguageReply = resultObj.text;
+            const evDesc = eventsFound.map(e => `"${e.title}" on ${e.event_date}`).join(' and ');
+            finalNaturalLanguageReply = `We have scheduled: ${evDesc}.`;
+          }
+        } else if (resultObj.entity_type === 'work_done') {
+          const logsFound = resultObj.raw_data || [];
+          if (logsFound.length === 0) {
+            finalNaturalLanguageReply = "You have no completed work logs recorded yet.";
+          } else {
+            const logSummary = logsFound.slice(0, 3).map(l => `"${l.title}" (${l.notes || 'completed'})`).join(', ');
+            finalNaturalLanguageReply = `Here is your recent work log: ${logSummary}.`;
           }
         } else {
-          if (toolData.priority === 'high' || lowerQuery.includes("urgent")) {
-            if (tasksFound.length === 1) {
-              const t = tasksFound[0];
-              finalNaturalLanguageReply = `You have 1 urgent task that needs attention: "${t.title}" (assigned to ${t.assignee || 'Unassigned'}).`;
+          const tasksFound = resultObj.raw_data || [];
+          if (tasksFound.length === 0) {
+            if (toolData.priority === 'high' || lowerQuery.includes("urgent")) {
+              finalNaturalLanguageReply = "You have no urgent tasks pending in your to-do list right now.";
+            } else if (toolData.status === 'doing' || lowerQuery.includes("progress")) {
+              finalNaturalLanguageReply = "There are no tasks currently in progress.";
+            } else if (toolData.status === 'todo') {
+              finalNaturalLanguageReply = "You have no pending tasks on your to-do board.";
             } else {
-              const taskList = tasksFound.map(t => `"${t.title}" (assigned to ${t.assignee || 'Unassigned'})`).join(', ');
-              finalNaturalLanguageReply = `Here are the urgent tasks you should tackle first: ${taskList}.`;
+              finalNaturalLanguageReply = resultObj.text;
             }
-          } else if (toolData.status === 'doing' || lowerQuery.includes("progress")) {
-            const taskList = tasksFound.map(t => `"${t.title}" (${t.assignee || 'Unassigned'})`).join(', ');
-            finalNaturalLanguageReply = `Currently in progress: ${taskList}.`;
           } else {
-            const taskList = tasksFound.map(t => `"${t.title}"`).join(', ');
-            finalNaturalLanguageReply = `You have ${tasksFound.length} task(s) on your to-do list: ${taskList}.`;
+            if (toolData.priority === 'high' || lowerQuery.includes("urgent")) {
+              if (tasksFound.length === 1) {
+                const t = tasksFound[0];
+                finalNaturalLanguageReply = `You have 1 urgent task that needs attention: "${t.title}" (assigned to ${t.assignee || 'Unassigned'}).`;
+              } else {
+                const taskList = tasksFound.map(t => `"${t.title}" (assigned to ${t.assignee || 'Unassigned'})`).join(', ');
+                finalNaturalLanguageReply = `Here are the urgent tasks you should tackle first: ${taskList}.`;
+              }
+            } else if (toolData.status === 'doing' || lowerQuery.includes("progress")) {
+              const taskList = tasksFound.map(t => `"${t.title}" (${t.assignee || 'Unassigned'})`).join(', ');
+              finalNaturalLanguageReply = `Currently in progress: ${taskList}.`;
+            } else {
+              const taskList = tasksFound.map(t => `"${t.title}"`).join(', ');
+              finalNaturalLanguageReply = `You have ${tasksFound.length} task(s) on your to-do list: ${taskList}.`;
+            }
           }
         }
       }
