@@ -14,6 +14,7 @@ const COLUMNS = [
 export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
   const [newTitle, setNewTitle] = useState('');
   const [selectedColumn, setSelectedColumn] = useState('todo');
+  const [priority, setPriority] = useState('medium');
   const [assignee, setAssignee] = useState('');
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isAdding, setIsAdding] = useState(false);
@@ -38,10 +39,12 @@ export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
       await TaskService.create({
         title: newTitle.trim(),
         status: selectedColumn,
+        priority: priority,
         assignee: assignee || 'Unassigned',
         linked_files: selectedFiles
       });
       setNewTitle('');
+      setPriority('medium');
       setSelectedFiles([]);
       setIsAdding(false);
       onRefresh();
@@ -95,6 +98,15 @@ export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
             <option value="todo">To-do</option>
             <option value="doing">In progress</option>
             <option value="done">Done</option>
+          </select>
+          <select
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+            style={{ padding: '6px 8px', background: 'transparent' }}
+          >
+            <option value="high">High Priority</option>
+            <option value="medium">Medium Priority</option>
+            <option value="low">Low Priority</option>
           </select>
           <input
             type="text"
@@ -210,19 +222,36 @@ export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
                                 ...dragProvided.draggableProps.style
                               }}
                             >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px' }}>
                                 <span style={{ fontSize: '13.5px', color: 'var(--text-primary)', fontWeight: '400', lineHeight: '1.4' }}>
                                   {t.title}
                                 </span>
-                                <button
-                                  onClick={() => handleDelete(t.id)}
-                                  style={{ color: 'var(--text-muted)', padding: '2px' }}
-                                  onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'}
-                                  onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
-                                  title="Delete"
-                                >
-                                  <Trash2 size={13} />
-                                </button>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  {t.priority && (
+                                    <span style={{
+                                      fontSize: '10px',
+                                      fontWeight: '600',
+                                      textTransform: 'uppercase',
+                                      padding: '1px 5px',
+                                      borderRadius: '3px',
+                                      letterSpacing: '0.04em',
+                                      background: t.priority === 'high' ? '#ef4444' : t.priority === 'medium' ? 'var(--bg-hover)' : 'transparent',
+                                      color: t.priority === 'high' ? '#fff' : 'var(--text-secondary)',
+                                      border: t.priority === 'high' ? 'none' : '1px solid var(--border-light)'
+                                    }}>
+                                      {t.priority}
+                                    </span>
+                                  )}
+                                  <button
+                                    onClick={() => handleDelete(t.id)}
+                                    style={{ color: 'var(--text-muted)', padding: '2px' }}
+                                    onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
+                                    title="Delete"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
                               </div>
 
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)' }}>
