@@ -1,0 +1,24 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+*.egg-info/
+dist/
+build/
+server/uploads/
+server/static/tts/
+server/*.index
+server/*.pkl
+
+# Node / Vite
+client/node_modules/
+client/dist/
+client/.vite/
+*.local
+.env
+.DS_Store
+Thumbs.db
