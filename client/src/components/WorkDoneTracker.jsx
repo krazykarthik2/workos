@@ -3,12 +3,13 @@ import { Plus, Check, Paperclip } from 'lucide-react';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import { WorkDoneService } from '../services';
+import AttachmentPicker from './AttachmentPicker';
 
 export default function WorkDoneTracker({ workList, onRefresh, allFiles, currentUser }) {
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
   const [completedBy, setCompletedBy] = useState(currentUser?.display_name || currentUser?.email?.split('@')[0] || '');
-  const [linkedFile, setLinkedFile] = useState('');
+  const [linkedFiles, setLinkedFiles] = useState([]);
   const [isAdding, setIsAdding] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -21,11 +22,11 @@ export default function WorkDoneTracker({ workList, onRefresh, allFiles, current
         notes,
         completed_by: completedBy || currentUser?.display_name || currentUser?.email?.split('@')[0] || 'Me',
         user_email: currentUser?.email || '',
-        linked_files: linkedFile ? [linkedFile] : []
+        linked_files: linkedFiles
       });
       setTitle('');
       setNotes('');
-      setLinkedFile('');
+      setLinkedFiles([]);
       setIsAdding(false);
       onRefresh();
       toast.success('Deliverable logged!');
@@ -64,7 +65,7 @@ export default function WorkDoneTracker({ workList, onRefresh, allFiles, current
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr auto auto', gap: '8px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '3fr auto auto auto', gap: '8px', alignItems: 'center' }}>
             <input
               type="text"
               placeholder="Output notes..."
@@ -72,16 +73,15 @@ export default function WorkDoneTracker({ workList, onRefresh, allFiles, current
               onChange={(e) => setNotes(e.target.value)}
               style={{ padding: '6px 10px', background: 'transparent' }}
             />
-            <select
-              value={linkedFile}
-              onChange={(e) => setLinkedFile(e.target.value)}
-              style={{ padding: '6px 8px', background: 'transparent' }}
-            >
-              <option value="">Attach proof...</option>
-              {allFiles.map(f => (
-                <option key={f.id} value={f.file_path}>{f.original_filename}</option>
-              ))}
-            </select>
+            
+            <AttachmentPicker
+              allFiles={allFiles}
+              selectedFiles={linkedFiles}
+              onFilesChange={setLinkedFiles}
+              entityType="work_done"
+              onFileUploaded={() => onRefresh()}
+            />
+
             <button
               type="submit"
               style={{

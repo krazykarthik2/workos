@@ -3,6 +3,7 @@ import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { Plus, Trash2, Paperclip, MoreHorizontal, CheckSquare, Circle, Clock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { TaskService } from '../services';
+import AttachmentPicker from './AttachmentPicker';
 
 const COLUMNS = [
   { id: 'todo', title: 'To-do', icon: <Circle size={14} /> },
@@ -14,7 +15,7 @@ export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
   const [newTitle, setNewTitle] = useState('');
   const [selectedColumn, setSelectedColumn] = useState('todo');
   const [assignee, setAssignee] = useState('');
-  const [selectedFile, setSelectedFile] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [isAdding, setIsAdding] = useState(false);
 
   const handleDragEnd = async (result) => {
@@ -38,12 +39,13 @@ export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
         title: newTitle.trim(),
         status: selectedColumn,
         assignee: assignee || 'Unassigned',
-        linked_files: selectedFile ? [selectedFile] : []
+        linked_files: selectedFiles
       });
       setNewTitle('');
-      setSelectedFile('');
+      setSelectedFiles([]);
       setIsAdding(false);
       onRefresh();
+      toast.success('Task created!');
     } catch {
       toast.error('Failed to create task');
     }
@@ -69,7 +71,8 @@ export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
           border: '1px solid var(--border-light)',
           borderRadius: '4px',
           background: 'var(--card-bg)',
-          alignItems: 'center'
+          alignItems: 'center',
+          flexWrap: 'wrap'
         }}>
           <input
             type="text"
@@ -78,7 +81,7 @@ export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
             style={{
-              flex: 1,
+              flex: '1 1 200px',
               padding: '6px 10px',
               border: '1px solid var(--border-light)',
               background: 'transparent'
@@ -100,16 +103,15 @@ export default function KanbanBoard({ tasks, onRefresh, allFiles }) {
             onChange={(e) => setAssignee(e.target.value)}
             style={{ width: '100px', padding: '6px 8px', background: 'transparent' }}
           />
-          <select
-            value={selectedFile}
-            onChange={(e) => setSelectedFile(e.target.value)}
-            style={{ padding: '6px 8px', maxWidth: '140px', background: 'transparent' }}
-          >
-            <option value="">Attach...</option>
-            {allFiles.map(f => (
-              <option key={f.id} value={f.file_path}>{f.original_filename}</option>
-            ))}
-          </select>
+
+          <AttachmentPicker
+            allFiles={allFiles}
+            selectedFiles={selectedFiles}
+            onFilesChange={setSelectedFiles}
+            entityType="task"
+            onFileUploaded={() => onRefresh()}
+          />
+
           <button
             type="submit"
             style={{

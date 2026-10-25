@@ -165,9 +165,21 @@ export default function FileManager({ files, onUploadSuccess, onSearch }) {
                   {f.summary || 'Summary unavailable'}
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginTop: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginTop: 'auto', alignItems: 'center' }}>
                   <span>{dayjs(f.uploaded_at).format('MMM D')}</span>
-                  <span>Indexed</span>
+                  {f.linked_entity ? (
+                    <span style={{ 
+                      fontSize: '10px', 
+                      background: 'var(--bg-hover)', 
+                      padding: '1px 6px', 
+                      borderRadius: '3px',
+                      color: 'var(--text-primary)'
+                    }}>
+                      Linked to {f.linked_entity.type}
+                    </span>
+                  ) : (
+                    <span>Indexed</span>
+                  )}
                 </div>
               </div>
             );

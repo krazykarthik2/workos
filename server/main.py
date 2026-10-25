@@ -333,7 +333,11 @@ def revert_timeline_action(timeline_id: str):
 
 # ----------------- AI FILE SYSTEM, OCR & VECTOR SEARCH -----------------
 @app.post("/api/files/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    linked_type: Optional[str] = Form(None),
+    linked_id: Optional[str] = Form(None)
+):
     db = get_database()
     file_id = str(uuid.uuid4())[:8]
     safe_filename = f"{file_id}_{file.filename}"
@@ -354,7 +358,8 @@ async def upload_file(file: UploadFile = File(...)):
         "extracted_text": extracted_text,
         "summary": summary,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
-        "file_size": os.path.getsize(save_path)
+        "file_size": os.path.getsize(save_path),
+        "linked_entity": {"type": linked_type, "id": linked_id} if linked_type and linked_id else None
     }
 
     db.files.insert_one(file_doc)
@@ -366,6 +371,16 @@ async def upload_file(file: UploadFile = File(...)):
         text=index_content,
         meta={"filename": file.filename, "file_id": file_id, "summary": summary}
     )
+
+    # Bi-directional linking: If uploaded from a task or work-done item, link file directly to it
+    if linked_type and linked_id:
+        file_path_ref = file_doc["file_path"]
+        if linked_type == "task":
+            db.tasks.update_one({"id": linked_id}, {"$addToSet": {"linked_files": file_path_ref}})
+        elif linked_type == "work_done":
+            db.work_done.update_one({"id": linked_id}, {"$addToSet": {"linked_files": file_path_ref}})
+        elif linked_type == "event":
+            db.events.update_one({"id": linked_id}, {"$addToSet": {"linked_files": file_path_ref}})
 
     return {k: v for k, v in file_doc.items() if k != "_id"}
 

@@ -42,9 +42,11 @@ export const TimelineService = {
 
 export const FileService = {
   list: (query = "") => apiClient.get(`/files${query ? `?search=${encodeURIComponent(query)}` : ""}`).then(r => r.data),
-  upload: (file) => {
+  upload: (file, linked_type = null, linked_id = null) => {
     const formData = new FormData();
     formData.append("file", file);
+    if (linked_type) formData.append("linked_type", linked_type);
+    if (linked_id) formData.append("linked_id", linked_id);
     return apiClient.post("/files/upload", formData, {
       headers: { "Content-Type": "multipart/form-data" }
     }).then(r => r.data);
