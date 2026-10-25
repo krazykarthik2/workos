@@ -192,33 +192,46 @@ class WebGPULLMManager {
     }
     messages.push({ role: "user", content: prompt });
 
-    const chunks = await this.engine.chat.completions.create({
-      messages,
-      temperature: 0.2,
-      top_p: 0.9,
-      repetition_penalty: 1.15,
-      max_tokens: 300,
-      stop: this.stopTokens,
-      stream: true
+    // Set a strict 15-second generation timeout for SLMs to prevent GPU hangs
+    const timeoutPromise = new Promise((_, reject) => {
+      const id = setTimeout(() => {
+        reject(new Error("Generation timeout: SLM took more than 15s to complete response."));
+      }, 15000);
+      if (signal) {
+        signal.addEventListener('abort', () => clearTimeout(id));
+      }
     });
 
-    let fullRawText = "";
-    for await (const chunk of chunks) {
-      if (signal && signal.aborted) {
-        break;
-      }
-      const delta = chunk.choices[0]?.delta?.content || "";
-      if (this.stopTokens.some(token => delta.includes(token))) {
-        break;
-      }
-      fullRawText += delta;
-      const sanitized = this.cleanEosTokens(fullRawText);
-      if (onChunk) {
-        onChunk(delta, sanitized);
-      }
-    }
+    const executionPromise = (async () => {
+      const chunks = await this.engine.chat.completions.create({
+        messages,
+        temperature: 0.1,
+        top_p: 0.85,
+        repetition_penalty: 1.15,
+        stop: this.stopTokens,
+        stream: true
+      });
 
-    return this.cleanEosTokens(fullRawText);
+      let fullRawText = "";
+      for await (const chunk of chunks) {
+        if (signal && signal.aborted) {
+          break;
+        }
+        const delta = chunk.choices[0]?.delta?.content || "";
+        if (this.stopTokens.some(token => delta.includes(token))) {
+          break;
+        }
+        fullRawText += delta;
+        const sanitized = this.cleanEosTokens(fullRawText);
+        if (onChunk) {
+          onChunk(delta, sanitized);
+        }
+      }
+
+      return this.cleanEosTokens(fullRawText);
+    })();
+
+    return Promise.race([executionPromise, timeoutPromise]);
   }
 
   async generate(prompt, systemPrompt = "") {
