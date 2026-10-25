@@ -598,10 +598,10 @@ STRICT INSTRUCTIONS:
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontWeight: '500', fontSize: '13.5px', color: 'var(--text-primary)' }}>
-              Gemma Agent
+              Llama 3.2 Agent
             </span>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              • TOON Protocol
+              • WebGPU Local SLM
             </span>
           </div>
 
@@ -696,7 +696,7 @@ STRICT INSTRUCTIONS:
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: '12px', fontWeight: '500', color: isUser ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                    {isUser ? 'You' : 'Gemma (WebGPU TOON Agent)'}
+                    {isUser ? 'You' : 'Llama 3.2 (WebGPU)'}
                   </span>
                   {!isUser && m.tts_audio_url && (
                     <button

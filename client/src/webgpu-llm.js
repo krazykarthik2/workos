@@ -8,11 +8,11 @@ class WebGPULLMManager {
     this.activeModel = null;
     this.abortController = null;
     this.stopTokens = [
-      "<eos>",
-      "<end_of_turn>",
-      "<start_of_turn>",
       "<|eot_id|>",
       "<|end_of_text|>",
+      "<end_of_turn>",
+      "<start_of_turn>",
+      "<eos>",
       "</s>",
       "\n\n\n"
     ];
@@ -82,9 +82,9 @@ class WebGPULLMManager {
       const customAppConfig = this.getCustomAppConfig();
 
       const candidateModels = [
-        "gemma3-1b-it-q4f16_1-MLC",
         "Llama-3.2-1B-Instruct-q4f16_1-MLC",
-        "SmolLM2-360M-Instruct-q4f16_1-MLC"
+        "gemma3-1b-it-q4f16_1-MLC",
+        "SmolLM2-1.7B-Instruct-q4f16_1-MLC"
       ];
 
       for (const modelId of candidateModels) {
