@@ -307,107 +307,75 @@ export default function ChatAssistant() {
     }, 1000);
 
     try {
-      // Step 1: Agent Thinking & Plan Formulation
-      setAgentSteps(prev => [
-        ...prev,
-        { type: 'thought', text: `Analyzing user intent: "${userText}"... Determining required tool execution.` }
-      ]);
-
-      const toolPlanningPrompt = `<|start_header_id|>system<|end_header_id|>
-You are the local AI Work OS Planner.
-Select exactly ONE tool and respond ONLY in TOON format (tool name followed by key: value attributes). Do not output conversational chit-chat.
+      // ReAct Loop Context (Maintains Thought -> Action -> Observation -> Thought -> Final Answer)
+      const reActSystemPrompt = `You are an autonomous AI Work OS Agent powered by WebGPU.
+You solve user queries by interleaving Thought, Action, and Observation steps.
 
 AVAILABLE TOOLS:
-- get_tasks: fetch tasks (status: all, todo, doing, done, priority: high, medium, low)
-- search_files: search indexed documents & OCR files (query: string)
-- get_events: list calendar events, meetings, milestones (month: november, october, etc.)
-- get_work_done: list logged deliverables, proof of work, completed milestones
-- create_task: create a new task (title: string, status: todo/doing/done, priority: high/medium/low, assignee: string)
-- assign_task: reassign an existing task (task_title: string, assignee: string)
-- move_task: update task status (task_title: string, status: todo/doing/done)
+- get_tasks: fetch tasks. Parameters: status (todo|doing|done|all), priority (high|medium|low), assignee (string)
+- get_events: list calendar events. Parameters: month (e.g. november), query (string)
+- get_work_done: list deliverables logged by team members
+- search_files: search indexed documents & OCR notes. Parameters: query (string)
+- create_task: create a new task. Parameters: title (string), status (todo|doing|done), priority (high|medium|low), assignee (string)
+- assign_task: reassign a task. Parameters: task_title (string), assignee (string)
+- move_task: move a task. Parameters: task_title (string), status (todo|doing|done)
 
-FEW-SHOT EXAMPLES:
-User: what tasks are in progress rn?
-Plan:
-tool: get_tasks
-status: doing
+FORMAT:
+Thought: <reason about what information is needed or what action to take next>
+Action:
+tool: <tool_name>
+<key>: <value>
 
-User: what are the tasks that i should do urgently
-Plan:
-tool: get_tasks
-status: todo
-priority: high
+When you receive an Observation, reason about it and decide whether you need another action or can provide the final conversational answer:
+Thought: <reason over observation>
+Final Answer: <direct, conversational, concise natural response addressing exactly what user asked>`;
 
-User: what tasks have high priority?
-Plan:
-tool: get_tasks
-priority: high
+      // --- ReAct Cycle 1: Thought & Action ---
+      setAgentSteps(prev => [
+        ...prev,
+        { type: 'thought', text: `Analyzing user goal: "${userText}"... Planning tool action.` }
+      ]);
 
-User: are there any new events in november?
-Plan:
-tool: get_events
-month: november
-
-User: what upcoming meetings or company events do we have?
-Plan:
-tool: get_events
-
-User: what is my work log?
-Plan:
-tool: get_work_done
-
-User: what work was delivered or logged today?
-Plan:
-tool: get_work_done
-
-User: find the quarterly revenue report and OCR notes
-Plan:
-tool: search_files
-query: quarterly revenue report<|eot_id|>
+      const cycle1Prompt = `<|start_header_id|>system<|end_header_id|>
+${reActSystemPrompt}<|eot_id|>
 <|start_header_id|>user<|end_header_id|>
 ${userText}<|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>
-`;
+Thought: `;
 
-      let stage1Output = "";
+      let cycle1Output = "";
       try {
-        stage1Output = await webGpuLLM.generate(toolPlanningPrompt);
+        cycle1Output = await webGpuLLM.generate(cycle1Prompt);
       } catch (err) {
-        console.warn("Stage 1 notice:", err);
+        console.warn("ReAct Cycle 1 error:", err);
       }
 
-      let toolData = parseToonOrFallback(stage1Output);
-      const lowerQuery = (userText || "").toLowerCase();
+      // Extract Thought from model output
+      let modelThought = "";
+      if (cycle1Output.includes("Action:")) {
+        modelThought = cycle1Output.split("Action:")[0].replace(/^Thought:\s*/i, '').trim();
+      } else if (cycle1Output.includes("tool:")) {
+        modelThought = cycle1Output.split("tool:")[0].replace(/^Thought:\s*/i, '').trim();
+      }
+      if (modelThought) {
+        setAgentSteps(prev => [
+          ...prev,
+          { type: 'thought', text: modelThought }
+        ]);
+      }
 
-      // RSI Semantic Disambiguation: Ensure parameters match user intent exactly
-      if (!toolData || !toolData.tool || (toolData.tool === 'get_tasks' && toolData.status === 'all')) {
-        if (lowerQuery.includes("urgent") || lowerQuery.includes("urgently") || lowerQuery.includes("asap")) {
-          toolData = { tool: "get_tasks", status: "todo", priority: "high" };
-        } else if (lowerQuery.includes("progress") || lowerQuery.includes("doing") || lowerQuery.includes("active")) {
-          toolData = { tool: "get_tasks", status: "doing" };
-        } else if (lowerQuery.includes("todo") || lowerQuery.includes("to do") || lowerQuery.includes("should do") || lowerQuery.includes("need to do")) {
-          toolData = { tool: "get_tasks", status: "todo" };
-        } else if (lowerQuery.includes("done") || lowerQuery.includes("finished") || lowerQuery.includes("completed")) {
-          toolData = { tool: "get_tasks", status: "done" };
-        } else if (lowerQuery.includes("event") || lowerQuery.includes("meeting")) {
-          toolData = { tool: "get_events" };
-        } else if (lowerQuery.includes("file") || lowerQuery.includes("doc")) {
-          toolData = { tool: "search_files", query: userText };
-        } else if (lowerQuery.includes("work") || lowerQuery.includes("deliverable")) {
-          toolData = { tool: "get_work_done" };
-        } else {
-          toolData = toolData || { tool: "get_tasks", status: "all" };
+      // Extract Action (TOON)
+      let toolData = parseToonOrFallback(cycle1Output);
+      if (!toolData || !toolData.tool) {
+        // Allow model output to specify action
+        const actionMatch = cycle1Output.match(/Action:\s*([\s\S]*)/i);
+        if (actionMatch) {
+          toolData = parseToonOrFallback(actionMatch[1]);
         }
       }
 
-      // Enforce status & priority criteria for task queries
-      if (toolData && toolData.tool === 'get_tasks') {
-        if ((lowerQuery.includes("should do") || lowerQuery.includes("need to do") || lowerQuery.includes("urgent")) && !toolData.status) {
-          toolData.status = "todo";
-        }
-        if ((lowerQuery.includes("urgent") || lowerQuery.includes("urgently") || lowerQuery.includes("asap")) && !toolData.priority) {
-          toolData.priority = "high";
-        }
+      if (!toolData || !toolData.tool) {
+        toolData = { tool: "get_tasks", status: "all" };
       }
 
       const toolParamsText = Object.entries(toolData)
@@ -415,116 +383,72 @@ ${userText}<|eot_id|>
         .map(([k, v]) => `${k}: "${v}"`)
         .join(', ');
 
-      // Step 2: Agent Tool Call
+      // Log Action
       setAgentSteps(prev => [
         ...prev,
-        { type: 'tool', text: `Calling Tool: ${toolData.tool}(${toolParamsText || 'none'})` }
+        { type: 'tool', text: `Action: ${toolData.tool}(${toolParamsText || 'none'})` }
       ]);
 
-      // Execute tool
+      // --- ReAct Execution: Observation ---
       const resultObj = await executeToolCall(toolData, userText);
-      const toolOutputSummary = resultObj.text;
+      const observationText = resultObj.text;
       const citedSources = resultObj.sources || [];
 
-      // Step 3: Tool Observation
+      // Log Observation
       setAgentSteps(prev => [
         ...prev,
-        { type: 'observation', text: `Tool Output: ${toolOutputSummary.split('\n')[0]}` }
+        { type: 'observation', text: `Observation: ${observationText.split('\n')[0]}` }
       ]);
 
-      // Step 4: Agent Reasoning & Natural Language Synthesis
+      // --- ReAct Cycle 2: Thought & Final Answer Synthesis ---
       setAgentSteps(prev => [
         ...prev,
-        { type: 'thought', text: `Analyzing observation: formulating precise natural response focused strictly on "${userText}".` }
+        { type: 'thought', text: `Reviewing observation... Synthesizing final answer.` }
       ]);
 
-      const synthesisPrompt = `<|start_header_id|>system<|end_header_id|>
-You are the AI Work OS executive assistant.
-Context: You executed tool "${toolData.tool}" with params (${toolParamsText || 'none'}).
-Observation from Database:
-"""
-${toolOutputSummary}
-"""
-
-Instructions:
-1. Formulate a direct, helpful, natural language response in 1-3 conversational sentences.
-2. If the user asked about events in a specific month (e.g. November), mention ONLY events in that month.
-3. If the user asked about work logs, summarize who delivered what deliverables.
-4. Speak conversationally as a polished human teammate. Do not dump raw bullet point symbols.<|eot_id|>
+      const cycle2Prompt = `<|start_header_id|>system<|end_header_id|>
+${reActSystemPrompt}<|eot_id|>
 <|start_header_id|>user<|end_header_id|>
 ${userText}<|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>
-`;
+Thought: ${modelThought || 'I will query the database.'}
+Action:
+tool: ${toolData.tool}
+${toolParamsText ? toolParamsText.split(', ').join('\n') : ''}
+Observation:
+"""
+${observationText}
+"""
+Thought: I have the required data from the observation. Now I will deliver the final answer to the user.
+Final Answer: `;
 
-      let finalNaturalLanguageReply = "";
+      let finalOutput = "";
       try {
-        finalNaturalLanguageReply = await webGpuLLM.generate(synthesisPrompt);
+        finalOutput = await webGpuLLM.generate(cycle2Prompt);
       } catch (e) {
-        console.warn('Synthesis fallback note:', e);
+        console.warn('ReAct Cycle 2 error:', e);
       }
 
-      // If synthesis is empty or failed, produce an accurate, factual natural language response
-      if (!finalNaturalLanguageReply || finalNaturalLanguageReply.trim().length === 0) {
-        if (resultObj.entity_type === 'event') {
-          const eventsFound = resultObj.raw_data || [];
-          if (eventsFound.length === 0) {
-            finalNaturalLanguageReply = "There are no company events scheduled for that timeframe.";
-          } else {
-            const evDesc = eventsFound.map(e => `"${e.title}" on ${e.event_date}`).join(' and ');
-            finalNaturalLanguageReply = `We have scheduled: ${evDesc}.`;
-          }
-        } else if (resultObj.entity_type === 'work_done') {
-          const logsFound = resultObj.raw_data || [];
-          if (logsFound.length === 0) {
-            finalNaturalLanguageReply = "You have no completed work logs recorded yet.";
-          } else {
-            const logSummary = logsFound.slice(0, 3).map(l => `"${l.title}" (${l.notes || 'completed'})`).join(', ');
-            finalNaturalLanguageReply = `Here is your recent work log: ${logSummary}.`;
-          }
-        } else {
-          const tasksFound = resultObj.raw_data || [];
-          if (tasksFound.length === 0) {
-            if (toolData.priority === 'high' || lowerQuery.includes("urgent")) {
-              finalNaturalLanguageReply = "You have no urgent tasks pending in your to-do list right now.";
-            } else if (toolData.status === 'doing' || lowerQuery.includes("progress")) {
-              finalNaturalLanguageReply = "There are no tasks currently in progress.";
-            } else if (toolData.status === 'todo') {
-              finalNaturalLanguageReply = "You have no pending tasks on your to-do board.";
-            } else {
-              finalNaturalLanguageReply = resultObj.text;
-            }
-          } else {
-            if (toolData.priority === 'high' || lowerQuery.includes("urgent")) {
-              if (tasksFound.length === 1) {
-                const t = tasksFound[0];
-                finalNaturalLanguageReply = `You have 1 urgent task that needs attention: "${t.title}" (assigned to ${t.assignee || 'Unassigned'}).`;
-              } else {
-                const taskList = tasksFound.map(t => `"${t.title}" (assigned to ${t.assignee || 'Unassigned'})`).join(', ');
-                finalNaturalLanguageReply = `Here are the urgent tasks you should tackle first: ${taskList}.`;
-              }
-            } else if (toolData.status === 'doing' || lowerQuery.includes("progress")) {
-              const taskList = tasksFound.map(t => `"${t.title}" (${t.assignee || 'Unassigned'})`).join(', ');
-              finalNaturalLanguageReply = `Currently in progress: ${taskList}.`;
-            } else {
-              const taskList = tasksFound.map(t => `"${t.title}"`).join(', ');
-              finalNaturalLanguageReply = `You have ${tasksFound.length} task(s) on your to-do list: ${taskList}.`;
-            }
-          }
-        }
+      let cleanFinalAnswer = finalOutput
+        ? finalOutput.replace(/^Final Answer:\s*/i, '').trim()
+        : "";
+
+      if (!cleanFinalAnswer || cleanFinalAnswer.length === 0) {
+        cleanFinalAnswer = observationText;
       }
 
       setMessages(prev => prev.map(m => m.id === assistantMsgId ? {
         ...m,
-        content: finalNaturalLanguageReply,
+        content: cleanFinalAnswer,
         sources: citedSources,
         steps: [...agentSteps]
       } : m));
 
-      await ChatService.saveTurn(activeSessionId, userText, finalNaturalLanguageReply, citedSources).catch(console.warn);
+      await ChatService.saveTurn(activeSessionId, userText, cleanFinalAnswer, citedSources).catch(console.warn);
       loadSessions();
 
       try {
-        const ttsData = await ChatService.tts(finalNaturalLanguageReply.replace(/[*#•]/g, ''));
+        const ttsData = await ChatService.tts(cleanFinalAnswer.replace(/[*#•]/g, ''));
         const ttsUrl = ttsData?.audio_url;
         if (ttsUrl) {
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, tts_audio_url: ttsUrl } : m));
