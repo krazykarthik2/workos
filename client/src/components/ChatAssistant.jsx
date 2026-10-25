@@ -415,7 +415,7 @@ Plan:<end_of_turn>
 
       const synthesisPrompt = `<start_of_turn>user
 You are Gemma, the local AI Work OS executive assistant.
-Context: You just executed tool "${toolData.tool}" to answer the user.
+Context: You executed tool "${toolData.tool}" with params (${toolParamsText || 'none'}).
 
 USER QUERY:
 "${userText}"
@@ -426,11 +426,11 @@ ${toolOutputSummary}
 """
 
 STRICT INSTRUCTIONS:
-1. Answer the query directly and truthfully in 1-3 natural sentences.
-2. If the user asked about tasks in progress ("doing"), mention ONLY tasks that are in progress. Do not mention todo or done tasks.
-3. If no tasks match, state clearly that nothing is currently in progress.
-4. Do not mention internal tool names or raw code unless asked. Speak as a helpful human teammate.
-5. Never repeat yourself or hallucinate items not present in the observation.<end_of_turn>
+1. Formulate a direct, natural language answer to the user in 1-3 conversational sentences.
+2. If the user asked about urgent or high priority tasks, focus ONLY on urgent/high priority items.
+3. If the user asked about tasks in progress ("doing"), mention ONLY tasks that are currently in progress.
+4. If no tasks match, state clearly that no items match the request.
+5. Do NOT simply repeat "Found X task(s): • Task..." raw lists. Speak conversationally as a helpful colleague.<end_of_turn>
 <start_of_turn>model
 `;
 
@@ -441,8 +441,14 @@ STRICT INSTRUCTIONS:
         console.warn('Synthesis fallback note:', e);
       }
 
+      // If synthesis failed, produce a clean conversational fallback instead of dumping raw database list
       if (!finalNaturalLanguageReply || finalNaturalLanguageReply.trim().length === 0) {
-        finalNaturalLanguageReply = toolOutputSummary;
+        if (resultObj.raw_data && resultObj.raw_data.length > 0) {
+          const names = resultObj.raw_data.map(t => `"${t.title}" (assigned to ${t.assignee || 'Unassigned'})`).join(', ');
+          finalNaturalLanguageReply = `Here are the matching items for your request: ${names}.`;
+        } else {
+          finalNaturalLanguageReply = resultObj.text;
+        }
       }
 
       setMessages(prev => prev.map(m => m.id === assistantMsgId ? {
