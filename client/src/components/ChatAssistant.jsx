@@ -135,30 +135,52 @@ export default function ChatAssistant() {
   };
 
   const executeToolCall = async (toolData, userText) => {
-    const toolName = (toolData.tool || "").toLowerCase();
+    let toolName = (toolData.tool || "").toLowerCase().trim();
+    const lowerUser = (userText || "").toLowerCase();
+
+    // Priority keyword redirection: if user explicitly asks for tasks/progress/todo, force get_tasks
+    if (
+      lowerUser.includes("task") ||
+      lowerUser.includes("progress") ||
+      lowerUser.includes("doing") ||
+      lowerUser.includes("todo") ||
+      lowerUser.includes("to do")
+    ) {
+      if (toolName === "get_events" || toolName === "get_work_done" || toolName === "search_files") {
+        toolName = "get_tasks";
+      }
+    }
 
     if (toolName === "get_tasks" || toolName.includes("task")) {
       const allTasks = await TaskService.list();
-      const targetStatus = (toolData.status || "all").toLowerCase();
+      let targetStatus = (toolData.status || "all").toLowerCase().trim();
+
+      if (lowerUser.includes("progress") || lowerUser.includes("doing") || targetStatus === "doing") {
+        targetStatus = "doing";
+      } else if (lowerUser.includes("todo") || lowerUser.includes("to do") || targetStatus === "todo") {
+        targetStatus = "todo";
+      } else if (lowerUser.includes("done") || lowerUser.includes("completed") || targetStatus === "done") {
+        targetStatus = "done";
+      }
 
       let filtered = allTasks;
-      if (targetStatus === "doing" || userText.toLowerCase().includes("progress") || userText.toLowerCase().includes("doing")) {
-        filtered = allTasks.filter(t => t.status?.toLowerCase() === "doing");
+      if (targetStatus === "doing") {
+        filtered = allTasks.filter(t => (t.status || "").toLowerCase() === "doing");
       } else if (targetStatus === "todo") {
-        filtered = allTasks.filter(t => t.status?.toLowerCase() === "todo");
+        filtered = allTasks.filter(t => (t.status || "").toLowerCase() === "todo");
       } else if (targetStatus === "done") {
-        filtered = allTasks.filter(t => t.status?.toLowerCase() === "done");
+        filtered = allTasks.filter(t => (t.status || "").toLowerCase() === "done");
       }
 
       if (filtered.length > 0) {
-        const lines = filtered.map(t => `• **${t.title}** (${t.status?.toUpperCase()}) — Assigned to: *${t.assignee || 'Unassigned'}* [Priority: ${t.priority || 'medium'}]`);
+        const lines = filtered.map(t => `• **${t.title}** (${(t.status || '').toUpperCase()}) — Assigned to: *${t.assignee || 'Unassigned'}* [Priority: ${t.priority || 'medium'}]`);
         return {
-          text: `Found ${filtered.length} task(s):\n\n${lines.join('\n')}`,
+          text: `Found ${filtered.length} task(s)${targetStatus !== 'all' ? ` in '${targetStatus.toUpperCase()}'` : ''}:\n\n${lines.join('\n')}`,
           sources: []
         };
       } else {
         return {
-          text: `There are currently no tasks in '${targetStatus.toUpperCase()}'. (Total tasks: ${allTasks.length})`,
+          text: `There are currently no tasks in '${targetStatus.toUpperCase()}'. (Total tasks across all stages: ${allTasks.length})`,
           sources: []
         };
       }

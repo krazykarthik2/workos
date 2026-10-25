@@ -4,7 +4,11 @@ import {
   Calendar, 
   FolderArchive, 
   History, 
-  Layers
+  Layers,
+  Shield,
+  User,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
 
@@ -15,7 +19,10 @@ import FileManager from './components/FileManager';
 import TimelineView from './components/TimelineView';
 import ChatAssistant from './components/ChatAssistant';
 import FloatingCommandPalette from './components/FloatingCommandPalette';
-import { TaskService, EventService, WorkDoneService, FileService, TimelineService } from './services';
+import AuthModal from './components/AuthModal';
+import UserRoleManager from './components/UserRoleManager';
+import { TaskService, EventService, WorkDoneService, FileService, TimelineService, UserService } from './services';
+import { listenAuthState, logoutUser } from './firebase';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('kanban');
@@ -25,12 +32,43 @@ export default function App() {
   const [files, setFiles] = useState([]);
   const [timeline, setTimeline] = useState([]);
 
+  // Auth & Roles State
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isRoleManagerOpen, setIsRoleManagerOpen] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = listenAuthState(async (user) => {
+      setFirebaseUser(user);
+      if (user) {
+        try {
+          const profile = await UserService.sync({
+            uid: user.uid,
+            email: user.email,
+            display_name: user.displayName || user.email.split('@')[0],
+            photo_url: user.photoURL || ''
+          });
+          setCurrentUser(profile);
+        } catch (e) {
+          console.error('Failed to sync user profile:', e);
+        }
+      } else {
+        setCurrentUser(null);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   const refreshAllData = async () => {
     try {
+      const userEmail = currentUser?.email || '';
+      const userRole = currentUser?.role || 'spectator';
+
       const [tData, eData, wData, fData, tmData] = await Promise.all([
         TaskService.list().catch(() => []),
         EventService.list().catch(() => []),
-        WorkDoneService.list().catch(() => []),
+        WorkDoneService.list(userEmail, userRole).catch(() => []),
         FileService.list().catch(() => []),
         TimelineService.list().catch(() => [])
       ]);
@@ -56,7 +94,7 @@ export default function App() {
 
   useEffect(() => {
     refreshAllData();
-  }, []);
+  }, [currentUser]);
 
   const navItems = [
     { id: 'kanban', label: 'Board', icon: <Layers size={14} />, count: tasks.length },
@@ -71,6 +109,14 @@ export default function App() {
       <Toaster position="bottom-right" toastOptions={{ style: { background: 'var(--card-bg)', color: 'var(--text-primary)', border: '1px solid var(--border-light)', fontSize: '13px' } }} />
 
       <FloatingCommandPalette onCommandExecuted={refreshAllData} />
+      <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} />
+      {currentUser?.role === 'admin' && (
+        <UserRoleManager 
+          isOpen={isRoleManagerOpen} 
+          onClose={() => setIsRoleManagerOpen(false)} 
+          currentUser={currentUser} 
+        />
+      )}
 
       {/* Notion Top Bar */}
       <header style={{
@@ -111,7 +157,91 @@ export default function App() {
           >
             Quick Command <kbd style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--text-muted)' }}>Ctrl+/</kbd>
           </span>
-          <span style={{ color: 'var(--text-muted)' }}>Local Server • WebGPU</span>
+
+          {/* User Profile & Auth Section */}
+          {currentUser ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {currentUser.role === 'admin' && (
+                <button
+                  onClick={() => setIsRoleManagerOpen(true)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '3px 8px',
+                    borderRadius: '4px',
+                    border: '1px solid var(--border-light)',
+                    background: 'var(--card-bg)',
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    fontWeight: '500'
+                  }}
+                  title="Manage user permissions and promote spectators"
+                >
+                  <Shield size={12} /> Manage Roles
+                </button>
+              )}
+
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: 'var(--bg-hover)'
+              }}>
+                <span style={{
+                  fontSize: '10px',
+                  fontWeight: '600',
+                  textTransform: 'uppercase',
+                  padding: '1px 5px',
+                  borderRadius: '3px',
+                  background: currentUser.role === 'admin' ? '#000' : currentUser.role === 'employee' ? '#2563eb' : '#6b7280',
+                  color: '#fff'
+                }}>
+                  {currentUser.role}
+                </span>
+                <span style={{ color: 'var(--text-secondary)', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {currentUser.display_name || currentUser.email}
+                </span>
+                <button
+                  onClick={() => logoutUser()}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    padding: '2px',
+                    display: 'flex',
+                    alignItems: 'center'
+                  }}
+                  title="Sign Out"
+                >
+                  <LogOut size={13} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setIsAuthOpen(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 10px',
+                borderRadius: '4px',
+                background: '#000',
+                color: '#fff',
+                border: 'none',
+                cursor: 'pointer',
+                fontWeight: '500',
+                fontSize: '12px'
+              }}
+            >
+              <LogIn size={12} /> Sign In / Register
+            </button>
+          )}
         </div>
       </header>
 
@@ -160,7 +290,12 @@ export default function App() {
               <KanbanBoard tasks={tasks} onRefresh={refreshAllData} allFiles={files} />
             )}
             {activeTab === 'work' && (
-              <WorkDoneTracker workList={workDone} onRefresh={refreshAllData} allFiles={files} />
+              <WorkDoneTracker 
+                workList={workDone} 
+                onRefresh={refreshAllData} 
+                allFiles={files} 
+                currentUser={currentUser}
+              />
             )}
             {activeTab === 'events' && (
               <EventsTracker events={events} onRefresh={refreshAllData} allFiles={files} />

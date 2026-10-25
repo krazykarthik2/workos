@@ -4,10 +4,10 @@ import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import { WorkDoneService } from '../services';
 
-export default function WorkDoneTracker({ workList, onRefresh, allFiles }) {
+export default function WorkDoneTracker({ workList, onRefresh, allFiles, currentUser }) {
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
-  const [completedBy, setCompletedBy] = useState('');
+  const [completedBy, setCompletedBy] = useState(currentUser?.display_name || currentUser?.email?.split('@')[0] || '');
   const [linkedFile, setLinkedFile] = useState('');
   const [isAdding, setIsAdding] = useState(false);
 
@@ -19,7 +19,8 @@ export default function WorkDoneTracker({ workList, onRefresh, allFiles }) {
       await WorkDoneService.create({
         title,
         notes,
-        completed_by: completedBy || 'Me',
+        completed_by: completedBy || currentUser?.display_name || currentUser?.email?.split('@')[0] || 'Me',
+        user_email: currentUser?.email || '',
         linked_files: linkedFile ? [linkedFile] : []
       });
       setTitle('');
@@ -27,6 +28,7 @@ export default function WorkDoneTracker({ workList, onRefresh, allFiles }) {
       setLinkedFile('');
       setIsAdding(false);
       onRefresh();
+      toast.success('Deliverable logged!');
     } catch {
       toast.error('Failed to log completed work');
     }

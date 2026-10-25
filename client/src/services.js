@@ -23,8 +23,16 @@ export const EventService = {
 };
 
 export const WorkDoneService = {
-  list: () => apiClient.get("/work-done").then(r => r.data),
+  list: (user_email = "", role = "spectator") => 
+    apiClient.get(`/work-done?user_email=${encodeURIComponent(user_email)}&role=${encodeURIComponent(role)}`).then(r => r.data),
   create: (data) => apiClient.post("/work-done", data).then(r => r.data)
+};
+
+export const UserService = {
+  sync: (data) => apiClient.post("/users/sync", data).then(r => r.data),
+  list: (requester_email) => apiClient.get(`/users?requester_email=${encodeURIComponent(requester_email)}`).then(r => r.data),
+  updateRole: (target_email, role, status = "active", requester_email) => 
+    apiClient.put(`/users/${encodeURIComponent(target_email)}/role?requester_email=${encodeURIComponent(requester_email)}`, { role, status }).then(r => r.data)
 };
 
 export const TimelineService = {

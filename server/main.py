@@ -76,7 +76,18 @@ class WorkDoneCreate(BaseModel):
     title: str
     notes: str = ""
     completed_by: str = "User"
+    user_email: Optional[str] = None
     linked_files: List[str] = []
+
+class UserRoleUpdate(BaseModel):
+    role: str  # "spectator", "employee", "admin"
+    status: Optional[str] = "active"  # "active", "suspended"
+
+class UserSync(BaseModel):
+    uid: str
+    email: str
+    display_name: Optional[str] = None
+    photo_url: Optional[str] = None
 
 class ChatSessionCreate(BaseModel):
     title: Optional[str] = "New Conversation"
@@ -207,11 +218,93 @@ def create_event(event: EventCreate):
     record_event("event", new_ev["id"], "create", None, new_ev, f"Logged event '{new_ev['title']}'")
     return {k: v for k, v in new_ev.items() if k != "_id"}
 
-# ----------------- WORK DONE TRACKER -----------------
-@app.get("/api/work-done")
-def list_work_done():
+# ----------------- USER MANAGEMENT & ROLE-BASED ACCESS CONTROL -----------------
+@app.post("/api/users/sync")
+def sync_user(payload: UserSync):
     db = get_database()
-    return list(db.work_done.find({}, {"_id": 0}).sort("completed_at", -1))
+    email_clean = payload.email.lower().strip()
+    existing = db.users.find_one({"email": email_clean})
+
+    # The owner/creator is automatically the Super Admin
+    is_owner = email_clean in ["goparajukarthik2@gmail.com", "admin@workos.local"]
+
+    if not existing:
+        user_doc = {
+            "uid": payload.uid,
+            "email": email_clean,
+            "display_name": payload.display_name or email_clean.split("@")[0],
+            "photo_url": payload.photo_url or "",
+            "role": "admin" if is_owner else "spectator", # Default registered accounts are Spectators
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_login": datetime.now(timezone.utc).isoformat()
+        }
+        db.users.insert_one(user_doc)
+        return {k: v for k, v in user_doc.items() if k != "_id"}
+    else:
+        # Update login time and sync profile
+        update_fields = {
+            "last_login": datetime.now(timezone.utc).isoformat(),
+            "photo_url": payload.photo_url or existing.get("photo_url", "")
+        }
+        if is_owner:
+            update_fields["role"] = "admin"
+        db.users.update_one({"email": email_clean}, {"$set": update_fields})
+        updated = db.users.find_one({"email": email_clean})
+        return {k: v for k, v in updated.items() if k != "_id"}
+
+@app.get("/api/users")
+def list_users(requester_email: Optional[str] = None):
+    db = get_database()
+    # Check if requester is admin
+    if requester_email:
+        req_user = db.users.find_one({"email": requester_email.lower().strip()})
+        if not req_user or req_user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Admin privileges required to view user directory.")
+    
+    users = list(db.users.find({}, {"_id": 0}).sort("created_at", -1))
+    return users
+
+@app.put("/api/users/{target_email}/role")
+def update_user_role(target_email: str, update: UserRoleUpdate, requester_email: str):
+    db = get_database()
+    req_user = db.users.find_one({"email": requester_email.lower().strip()})
+    if not req_user or req_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can alter user roles or account status.")
+
+    target_clean = target_email.lower().strip()
+    valid_roles = ["spectator", "employee", "admin"]
+    if update.role not in valid_roles:
+        raise HTTPException(status_code=400, detail="Invalid role. Must be spectator, employee, or admin.")
+
+    result = db.users.update_one(
+        {"email": target_clean},
+        {"$set": {"role": update.role, "status": update.status or "active"}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Target user not found.")
+
+    record_event("user_role", target_clean, "update", None, {"role": update.role, "status": update.status}, f"Admin changed role of {target_clean} to {update.role.upper()}")
+    return {"status": "success", "email": target_clean, "role": update.role, "account_status": update.status}
+
+# ----------------- WORK DONE TRACKER (ROLE FILTERED) -----------------
+@app.get("/api/work-done")
+def list_work_done(user_email: Optional[str] = None, role: Optional[str] = "spectator"):
+    db = get_database()
+    # Admin sees everything; Employee or Spectator only sees work logged by themselves
+    if role == "admin":
+        return list(db.work_done.find({}, {"_id": 0}).sort("completed_at", -1))
+    
+    if user_email:
+        email_clean = user_email.lower().strip()
+        return list(db.work_done.find({
+            "$or": [
+                {"user_email": email_clean},
+                {"completed_by": {"$regex": email_clean.split("@")[0], "$options": "i"}}
+            ]
+        }, {"_id": 0}).sort("completed_at", -1))
+    
+    return []
 
 @app.post("/api/work-done")
 def create_work_done(item: WorkDoneCreate):
