@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "glassbasekrazy"
+  },
+  "targets": {
+    "glassbasekrazy": {
+      "hosting": {
+        "innovarsity": [
+          "innovarsity"
+        ]
+      }
+    }
+  }
+}
