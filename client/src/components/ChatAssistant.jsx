@@ -433,22 +433,27 @@ Plan:<end_of_turn>
       // Step 4: Agent Reasoning & Natural Language Synthesis
       setAgentSteps(prev => [
         ...prev,
-        { type: 'thought', text: `Synthesizing final conversational answer in natural language based on tool output...` }
+        { type: 'thought', text: `Analyzing observation: formulating precise natural response focused strictly on "${userText}".` }
       ]);
 
       const synthesisPrompt = `<start_of_turn>user
-You are Gemma, the local intelligent Work OS Assistant.
-The user asked: "${userText}"
+You are Gemma, the local AI Work OS executive assistant.
+Context: You just executed tool "${toolData.tool}" to answer the user.
 
-You ran the tool "${toolData.tool}" which returned:
+USER QUERY:
+"${userText}"
+
+TOOL OBSERVATION:
 """
 ${toolOutputSummary}
 """
 
-Formulate a helpful, direct, concise natural language response to the user.
-- If they asked what is in progress, mention ONLY what is in progress.
-- Speak naturally and politely as a professional colleague.
-- Be concise.<end_of_turn>
+STRICT INSTRUCTIONS:
+1. Answer the query directly and truthfully in 1-3 natural sentences.
+2. If the user asked about tasks in progress ("doing"), mention ONLY tasks that are in progress. Do not mention todo or done tasks.
+3. If no tasks match, state clearly that nothing is currently in progress.
+4. Do not mention internal tool names or raw code unless asked. Speak as a helpful human teammate.
+5. Never repeat yourself or hallucinate items not present in the observation.<end_of_turn>
 <start_of_turn>model
 `;
 
