@@ -82,19 +82,71 @@ Rules:
         llmOutput = backendResp.response;
       }
 
-      // 3. Parse action JSON instruction from LLM output
+      // 3. Parse action JSON instruction from LLM output or direct structured command
       let finalResult = llmOutput;
-      const jsonMatch = llmOutput && llmOutput.match(/\{[\s\S]*"action"[\s\S]*\}/);
+      let actionData = null;
+
+      // Try finding standard JSON object in output or raw prompt
+      const jsonMatch = (llmOutput && llmOutput.match(/\{[\s\S]*\}/)) || commandText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         try {
-          const actionData = JSON.parse(jsonMatch[0]);
+          // Clean possible unquoted trailing keys or broken syntax
+          let jsonStr = jsonMatch[0];
+          // Fix missing quotes on values like "title": "Generate a new task \n "priority"
+          jsonStr = jsonStr.replace(/"\s*\n\s*"([a-zA-Z0-9_]+)":/g, '",\n"$1":');
+          // If title didn't close its quote before newline
+          jsonStr = jsonStr.replace(/"title":\s*"([^"\n]+)\n/g, '"title": "$1",\n');
+          actionData = JSON.parse(jsonStr);
+        } catch {
+          // Manual fallback regex extractor
+          const titleM = (llmOutput || commandText).match(/"title":\s*"([^"]+)/i);
+          const assigneeM = (llmOutput || commandText).match(/"assignee":\s*"([^"]+)/i);
+          const priorityM = (llmOutput || commandText).match(/"priority":\s*"([^"]+)/i);
+          const statusM = (llmOutput || commandText).match(/"status":\s*"([^"]+)/i);
+          if (titleM || assigneeM) {
+            actionData = {
+              action: 'create_task',
+              title: titleM ? titleM[1].trim() : 'New Task',
+              assignee: assigneeM ? assigneeM[1].trim() : 'Alex',
+              priority: priorityM ? priorityM[1].trim() : 'high',
+              status: (statusM && ['todo', 'doing', 'done'].includes(statusM[1].toLowerCase())) ? statusM[1].toLowerCase() : 'todo'
+            };
+          }
+        }
+      }
+
+      // Check if command is a direct intent e.g. "create task ... assigned to Alex"
+      if (!actionData) {
+        const lowerCmd = commandText.toLowerCase();
+        if (lowerCmd.includes('create') && (lowerCmd.includes('task') || lowerCmd.includes('assign'))) {
+          const assigneeMatch = commandText.match(/assign(?:ed)?\s+(?:to\s+)?([a-zA-Z0-9_]+)/i);
+          actionData = {
+            action: 'create_task',
+            title: commandText.replace(/create\s+(?:a\s+)?(?:new\s+)?task\s+/i, '').replace(/assign(?:ed)?\s+to\s+[a-zA-Z0-9_]+/i, '').trim() || 'New Generated Task',
+            assignee: assigneeMatch ? assigneeMatch[1] : 'Alex',
+            priority: lowerCmd.includes('high') ? 'high' : 'medium',
+            status: lowerCmd.includes('doing') ? 'doing' : lowerCmd.includes('done') ? 'done' : 'todo'
+          };
+        }
+      }
+
+      if (actionData) {
+        try {
+          if (!actionData.action) {
+            actionData.action = 'create_task';
+          }
+
+          // Normalize status
+          let safeStatus = (actionData.status || 'todo').toLowerCase();
+          if (!['todo', 'doing', 'done'].includes(safeStatus)) {
+            safeStatus = 'todo';
+          }
 
           // --- ASSIGN TASK LOGIC ---
           if (actionData.action === 'assign_task') {
             const targetQuery = (actionData.title || commandText).toLowerCase();
-            const assigneeName = actionData.assignee || 'Unassigned';
+            const assigneeName = actionData.assignee || 'Alex';
 
-            // Find matching task by ID or title substring
             const target = currentTasks.find(t => 
               t.id.toLowerCase() === targetQuery ||
               t.title.toLowerCase().includes(targetQuery) ||
@@ -105,24 +157,32 @@ Rules:
               await TaskService.update(target.id, { assignee: assigneeName });
               finalResult = `Assigned task "${target.title}" to ${assigneeName}`;
             } else {
-              finalResult = `Could not find a matching task to assign to ${assigneeName}.`;
+              // Create if not found
+              const created = await TaskService.create({
+                title: actionData.title || 'New Task',
+                status: safeStatus,
+                priority: actionData.priority || 'high',
+                assignee: assigneeName,
+                linked_files: []
+              });
+              finalResult = `Created task: "${created.title}" in ${created.status.toUpperCase()} assigned to ${created.assignee}`;
             }
           }
           // --- CREATE TASK LOGIC ---
           else if (actionData.action === 'create_task') {
             const created = await TaskService.create({
-              title: actionData.title || commandText,
-              status: actionData.status || 'todo',
-              priority: actionData.priority || 'medium',
-              assignee: actionData.assignee || 'Unassigned',
+              title: actionData.title || 'Generate a new task',
+              status: safeStatus,
+              priority: actionData.priority || 'high',
+              assignee: actionData.assignee || 'Alex',
               linked_files: []
             });
-            finalResult = `Created task: "${actionData.title || commandText}" in ${(actionData.status || 'todo').toUpperCase()}${actionData.assignee ? ` assigned to ${actionData.assignee}` : ''}`;
+            finalResult = `Created task: "${created.title}" in ${created.status.toUpperCase()} assigned to ${created.assignee} [Priority: ${created.priority}]`;
           } 
           // --- MOVE TASK LOGIC ---
           else if (actionData.action === 'move_task') {
             const targetQuery = (actionData.title || commandText).toLowerCase();
-            const destStatus = actionData.status || 'done';
+            const destStatus = ['todo', 'doing', 'done'].includes(safeStatus) ? safeStatus : 'done';
 
             const target = currentTasks.find(t => 
               t.id.toLowerCase() === targetQuery ||
@@ -150,7 +210,7 @@ Rules:
             }
           }
         } catch (e) {
-          console.warn('JSON action parse note:', e);
+          console.warn('Action execution note:', e);
         }
       }
 
