@@ -40,31 +40,15 @@ class WebGPULLMManager {
   }
 
   getCustomAppConfig() {
-    const defaultList = webllm.prebuiltAppConfig.model_list;
-    const customList = defaultList.map((m) => {
-      if (m.model_id.includes("gemma3-1b")) {
-        return {
-          ...m,
-          overrides: {
-            ...m.overrides,
-            sliding_window_size: -1,
-            context_window_size: 2048
-          }
-        };
-      }
-      return m;
-    });
-
     return {
       ...webllm.prebuiltAppConfig,
-      useIndexedDBCache: true,
-      model_list: customList
+      useIndexedDBCache: true
     };
   }
 
   async init(onProgress) {
     if (this.engine) {
-      if (onProgress) onProgress(`Model Ready`, 1.0, this.activeModel || "Llama-3.2-1B-Instruct-q4f16_1-MLC");
+      if (onProgress) onProgress(`Llama 3.2 Ready`, 1.0, this.activeModel || "Llama-3.2-1B-Instruct-q4f16_1-MLC");
       return this.engine;
     }
 
@@ -80,40 +64,32 @@ class WebGPULLMManager {
       }
 
       const customAppConfig = this.getCustomAppConfig();
+      const modelId = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
 
-      const candidateModels = [
-        "Llama-3.2-1B-Instruct-q4f16_1-MLC",
-        "gemma3-1b-it-q4f16_1-MLC",
-        "SmolLM2-1.7B-Instruct-q4f16_1-MLC"
-      ];
+      try {
+        console.log(`[WebGPU Engine] Allocating model: ${modelId}`);
+        if (onProgress) onProgress(`Loading ${modelId}...`, 0.1, modelId);
 
-      for (const modelId of candidateModels) {
-        try {
-          console.log(`[WebGPU Engine] Allocating model: ${modelId}`);
-          if (onProgress) onProgress(`Loading ${modelId}...`, 0.1, modelId);
-
-          const engine = new webllm.MLCEngine({
-            appConfig: customAppConfig,
-            initProgressCallback: (report) => {
-              if (onProgress) {
-                onProgress(report.text, report.progress, modelId);
-              }
+        const engine = new webllm.MLCEngine({
+          appConfig: customAppConfig,
+          initProgressCallback: (report) => {
+            if (onProgress) {
+              onProgress(report.text, report.progress, modelId);
             }
-          });
+          }
+        });
 
-          await engine.reload(modelId);
+        await engine.reload(modelId);
 
-          this.engine = engine;
-          this.activeModel = modelId;
-          console.log(`[WebGPU Engine] Active in GPU VRAM: ${modelId}`);
-          if (onProgress) onProgress(`Model (${modelId.split('-')[0]}) Ready`, 1.0, modelId);
-          return this.engine;
-        } catch (err) {
-          console.warn(`[WebGPU Engine] Failed initializing ${modelId}:`, err);
-        }
+        this.engine = engine;
+        this.activeModel = modelId;
+        console.log(`[WebGPU Engine] Active in GPU VRAM: ${modelId}`);
+        if (onProgress) onProgress(`Llama 3.2 Ready`, 1.0, modelId);
+        return this.engine;
+      } catch (err) {
+        console.error(`[WebGPU Engine] Failed initializing ${modelId}:`, err);
+        return null;
       }
-
-      return null;
     })();
 
     if (typeof window !== "undefined") {
