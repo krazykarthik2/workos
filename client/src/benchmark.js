@@ -56,6 +56,47 @@ export const EVALUATION_DATASET = [
     query: "what work was delivered or logged today?",
     expectedTool: "get_work_done",
     expectedParams: {}
+  },
+  // --- New test cases ---
+  {
+    query: "any new events in november",
+    expectedTool: "get_events",
+    expectedParams: { month: "november" }
+  },
+  {
+    query: "what is my work log",
+    expectedTool: "get_work_done",
+    expectedParams: {}
+  },
+  {
+    query: "are there any meetings this week",
+    expectedTool: "get_events",
+    expectedParams: {}
+  },
+  {
+    query: "what did the team accomplish",
+    expectedTool: "get_work_done",
+    expectedParams: {}
+  },
+  {
+    query: "search for the budget spreadsheet",
+    expectedTool: "search_files",
+    expectedParams: {}
+  },
+  {
+    query: "what's on the calendar for next month",
+    expectedTool: "get_events",
+    expectedParams: {}
+  },
+  {
+    query: "show me completed milestones",
+    expectedTool: "get_work_done",
+    expectedParams: {}
+  },
+  {
+    query: "any announcements or conferences coming up",
+    expectedTool: "get_events",
+    expectedParams: {}
   }
 ];
 

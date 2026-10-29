@@ -64,7 +64,7 @@ class WebGPULLMManager {
 
   async init(onProgress) {
     if (this.engine) {
-      if (onProgress) onProgress(`Gemma Ready`, 1.0, this.activeModel || "gemma3-1b-it-q4f16_1-MLC");
+      if (onProgress) onProgress(`Model Ready`, 1.0, this.activeModel || "Llama-3.2-1B-Instruct-q4f16_1-MLC");
       return this.engine;
     }
 
@@ -106,7 +106,7 @@ class WebGPULLMManager {
           this.engine = engine;
           this.activeModel = modelId;
           console.log(`[WebGPU Engine] Active in GPU VRAM: ${modelId}`);
-          if (onProgress) onProgress(`Gemma (${modelId.split('-')[0]}) Ready`, 1.0, modelId);
+          if (onProgress) onProgress(`Model (${modelId.split('-')[0]}) Ready`, 1.0, modelId);
           return this.engine;
         } catch (err) {
           console.warn(`[WebGPU Engine] Failed initializing ${modelId}:`, err);

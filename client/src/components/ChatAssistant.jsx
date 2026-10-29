@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Volume2, Sparkles, Database, Plus, Trash2, MessageSquare, Wrench, Square } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { decode as decodeToon } from '@toon-format/toon';
 import { ChatService, FileService, TaskService, EventService, WorkDoneService } from '../services';
 import { webGpuLLM } from '../webgpu-llm';
+import { detectIntentFromQuery, parseLLMOutput, refineToolData } from '../intent-detection';
 
 export default function ChatAssistant() {
   const [sessions, setSessions] = useState([]);
@@ -108,32 +108,7 @@ export default function ChatAssistant() {
   };
 
   const parseToonOrFallback = (rawText) => {
-    if (!rawText) return null;
-    try {
-      const cleanText = rawText.replace(/```(toon)?/g, '').trim();
-      const parsed = decodeToon(cleanText);
-      if (parsed && typeof parsed === 'object' && parsed.tool) {
-        return parsed;
-      }
-    } catch {
-      const toolMatch = rawText.match(/tool:\s*([a-zA-Z0-9_-]+)/i);
-      if (toolMatch) {
-        const obj = { tool: toolMatch[1].trim() };
-        const lines = rawText.split('\n');
-        for (const line of lines) {
-          const parts = line.split(':');
-          if (parts.length >= 2) {
-            const key = parts[0].trim();
-            const val = parts.slice(1).join(':').trim();
-            if (key !== 'tool' && key && val) {
-              obj[key] = val;
-            }
-          }
-        }
-        return obj;
-      }
-    }
-    return null;
+    return parseLLMOutput(rawText);
   };
 
   const executeToolCall = async (toolData, userText) => {
@@ -307,28 +282,149 @@ export default function ChatAssistant() {
     }, 1000);
 
     try {
-      // ReAct Loop Context (Maintains Thought -> Action -> Observation -> Thought -> Final Answer)
-      const reActSystemPrompt = `You are an autonomous AI Work OS Agent powered by WebGPU.
-You solve user queries by interleaving Thought, Action, and Observation steps.
+      // ReAct Loop Context (Structured for Llama 3.2 1B Instruct)
+      const reActSystemPrompt = `You are an AI Work OS Agent. Given the user query, reason with a Thought, then choose the EXACT matching tool Action.
 
-AVAILABLE TOOLS:
-- get_tasks: fetch tasks. Parameters: status (todo|doing|done|all), priority (high|medium|low), assignee (string)
-- get_events: list calendar events. Parameters: month (e.g. november), query (string)
-- get_work_done: list deliverables logged by team members
-- search_files: search indexed documents & OCR notes. Parameters: query (string)
-- create_task: create a new task. Parameters: title (string), status (todo|doing|done), priority (high|medium|low), assignee (string)
-- assign_task: reassign a task. Parameters: task_title (string), assignee (string)
-- move_task: move a task. Parameters: task_title (string), status (todo|doing|done)
+TOOLS (in order of priority):
+1. get_events: query company calendar, meetings, events, announcements, conferences, summits, keynotes, schedule.
+   Parameters: month (e.g. "november"), query (string)
+2. get_work_done: query deliverables, proof of work, logged completed milestones, work logs, achievements, accomplished work.
+   Parameters: none
+3. get_tasks: query kanban tasks and to-dos, task status, assignments.
+   Parameters: status (todo|doing|done|all), priority (high|medium|low), assignee (string)
+4. search_files: search documents, OCR notes, uploaded PDFs, files, reports, presentations.
+   Parameters: query (string)
+5. create_task: create a new task.
+   Parameters: title, status, priority, assignee
+6. assign_task: reassign a task.
+   Parameters: task_title, assignee
+7. move_task: move task status.
+   Parameters: task_title, status
 
-FORMAT:
-Thought: <reason about what information is needed or what action to take next>
+IMPORTANT RULES:
+- Do NOT use get_tasks when the user asks about events, meetings, conferences, calendar, schedule, upcoming events, or work logs.
+- Use get_events for anything about calendar, meetings, conferences, announcements, summits, or schedule.
+- Use get_work_done for anything about work logs, deliverables, what was accomplished, completed work, or milestones.
+
+You MUST output EXACTLY this format:
+
+Thought: [your reasoning about which tool to use]
 Action:
-tool: <tool_name>
-<key>: <value>
+tool: [tool_name]
+[param]: [value]
 
-When you receive an Observation, reason about it and decide whether you need another action or can provide the final conversational answer:
-Thought: <reason over observation>
-Final Answer: <direct, conversational, concise natural response addressing exactly what user asked>`;
+EXAMPLES:
+
+Query: did you see any new events in nov this year
+Thought: The user is asking about calendar events in November. I must call get_events.
+Action:
+tool: get_events
+month: november
+
+Query: any events in november
+Thought: The user wants events for November. I will call get_events with month november.
+Action:
+tool: get_events
+month: november
+
+Query: upcoming meetings
+Thought: The user wants to know about upcoming meetings. Meetings are events. I must call get_events.
+Action:
+tool: get_events
+
+Query: what's on the calendar
+Thought: The user is asking about the calendar schedule. I must call get_events.
+Action:
+tool: get_events
+
+Query: any conferences this month
+Thought: Conferences are events. I must call get_events.
+Action:
+tool: get_events
+
+Query: are there any meetings this week
+Thought: Meetings are calendar events. I must call get_events.
+Action:
+tool: get_events
+
+Query: any announcements or conferences coming up
+Thought: Announcements and conferences are events. I must call get_events.
+Action:
+tool: get_events
+
+Query: what is my work log
+Thought: The user is asking for their work log, which means deliverables and completed work. I must call get_work_done.
+Action:
+tool: get_work_done
+
+Query: what did I deliver
+Thought: The user wants to know what was delivered. This is about completed work. I must call get_work_done.
+Action:
+tool: get_work_done
+
+Query: show completed work
+Thought: The user wants completed work records. I must call get_work_done.
+Action:
+tool: get_work_done
+
+Query: what has been accomplished
+Thought: The user is asking about accomplishments, which are work deliverables. I must call get_work_done.
+Action:
+tool: get_work_done
+
+Query: what did the team accomplish
+Thought: The user asks about team accomplishments. I must call get_work_done.
+Action:
+tool: get_work_done
+
+Query: show me completed milestones
+Thought: Milestones are completed work items. I must call get_work_done.
+Action:
+tool: get_work_done
+
+Query: what tasks are in progress right now
+Thought: The user is asking for tasks in progress. I will call get_tasks with status doing.
+Action:
+tool: get_tasks
+status: doing
+
+Query: what urgent tasks should I do
+Thought: The user is asking for pending high priority tasks. I will call get_tasks with status todo and priority high.
+Action:
+tool: get_tasks
+status: todo
+priority: high
+
+Query: what should I do urgently
+Thought: The user needs urgent pending tasks. I must call get_tasks with status todo and priority high.
+Action:
+tool: get_tasks
+status: todo
+priority: high
+
+Query: pending to-dos
+Thought: The user wants pending tasks. I will call get_tasks with status todo.
+Action:
+tool: get_tasks
+status: todo
+
+Query: search files for quarterly roadmap
+Thought: The user wants to find documents about quarterly roadmap. I will call search_files.
+Action:
+tool: search_files
+query: quarterly roadmap
+
+Query: find the quarterly report
+Thought: The user wants to find a report file. I will call search_files.
+Action:
+tool: search_files
+query: quarterly report
+
+Query: search for meeting notes
+Thought: The user wants to find meeting notes in files. I will call search_files.
+Action:
+tool: search_files
+query: meeting notes`;
 
       // --- ReAct Cycle 1: Thought & Action ---
       setAgentSteps(prev => [
@@ -336,16 +432,9 @@ Final Answer: <direct, conversational, concise natural response addressing exact
         { type: 'thought', text: `Analyzing user goal: "${userText}"... Planning tool action.` }
       ]);
 
-      const cycle1Prompt = `<|start_header_id|>system<|end_header_id|>
-${reActSystemPrompt}<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
-${userText}<|eot_id|>
-<|start_header_id|>assistant<|end_header_id|>
-Thought: `;
-
       let cycle1Output = "";
       try {
-        cycle1Output = await webGpuLLM.generate(cycle1Prompt);
+        cycle1Output = await webGpuLLM.generate(`Query: ${userText}`, reActSystemPrompt);
       } catch (err) {
         console.warn("ReAct Cycle 1 error:", err);
       }
@@ -366,16 +455,15 @@ Thought: `;
 
       // Extract Action (TOON)
       let toolData = parseToonOrFallback(cycle1Output);
-      if (!toolData || !toolData.tool) {
-        // Allow model output to specify action
-        const actionMatch = cycle1Output.match(/Action:\s*([\s\S]*)/i);
-        if (actionMatch) {
-          toolData = parseToonOrFallback(actionMatch[1]);
-        }
+
+      // Post-process: refine tool data with user query context
+      if (toolData && toolData.tool) {
+        toolData = refineToolData(toolData, userText);
       }
 
+      // If model failed to output an action, use keyword-based intent detection
       if (!toolData || !toolData.tool) {
-        toolData = { tool: "get_tasks", status: "all" };
+        toolData = detectIntentFromQuery(userText);
       }
 
       const toolParamsText = Object.entries(toolData)
@@ -406,25 +494,21 @@ Thought: `;
         { type: 'thought', text: `Reviewing observation... Synthesizing final answer.` }
       ]);
 
-      const cycle2Prompt = `<|start_header_id|>system<|end_header_id|>
-${reActSystemPrompt}<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
-${userText}<|eot_id|>
-<|start_header_id|>assistant<|end_header_id|>
-Thought: ${modelThought || 'I will query the database.'}
-Action:
-tool: ${toolData.tool}
-${toolParamsText ? toolParamsText.split(', ').join('\n') : ''}
-Observation:
+      const cycle2System = reActSystemPrompt;
+      const cycle2User = `User asked: "${userText}"
+
+You called tool: ${toolData.tool} and got this observation:
 """
 ${observationText}
 """
-Thought: I have the required data from the observation. Now I will deliver the final answer to the user.
-Final Answer: `;
+
+Now write a helpful, natural language Final Answer for the user based on this observation. Be concise and conversational. Do not dump raw data.
+
+Final Answer:`;
 
       let finalOutput = "";
       try {
-        finalOutput = await webGpuLLM.generate(cycle2Prompt);
+        finalOutput = await webGpuLLM.generate(cycle2User, cycle2System);
       } catch (e) {
         console.warn('ReAct Cycle 2 error:', e);
       }
@@ -512,7 +596,7 @@ Final Answer: `;
         }}>
           <Sparkles size={32} color="var(--text-primary)" style={{ marginBottom: '14px' }} />
           <h3 style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '6px' }}>
-            Initializing Gemma 3 (WebGPU)
+            Initializing Llama 3.2 (WebGPU)
           </h3>
           <p style={{ fontSize: '12px', color: 'var(--text-secondary)', maxWidth: '280px', marginBottom: '18px' }}>
             Allocating model shaders into GPU VRAM.
